@@ -1,0 +1,35 @@
+{
+    "api_environments": {
+        "prod": "",
+        "dev": "",
+        "local": ""
+    },
+    "default_settings": {
+        "api": "prod",
+        "volume": 0.7,
+        "fetch_interval": 20,
+        "vfr_only": false,
+        "playback_delay": 0.5,
+        "debug": false,
+        "geo_filter": false,
+        "airports": [],
+        "buffer_size": 1024
+    },
+    "zab_bounds": {
+        "north": 37.0,
+        "south": 31.0,
+        "east": -103.0,
+        "west": -114.0
+    },
+    "logging": {
+        "format": "%(asctime)s - %(levelname)s - %(message)s",
+        "default_level": "INFO"
+    },
+    "ffmpeg": {
+        "ffmpeg_path": null,
+        "ffprobe_path": null
+    },
+    "playback": {
+        "backend": null
+    }
+}

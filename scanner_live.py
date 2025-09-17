@@ -1,35 +1,66 @@
 #!/usr/bin/env python3
 
+#!/usr/bin/env python3
+"""
+Enhanced Real-Time Aviation Scanner with WebSocket support
+Provides lower latency audio streaming and optional WebSocket connections
+"""
+
 import os
+import platform
+import time
+import asyncio
+import platform
 import requests
 import time
 import threading
 import queue
 import argparse
-from typing import Dict, List, Optional
+import asyncio
+from typing import Dict, List, Optional, Callable
 from dataclasses import dataclass
 from urllib.parse import urljoin
 import logging
 import sounddevice as sd
 import numpy as np
-from pydub import AudioSegment
 import io
 import json
 from pathlib import Path
 import subprocess
-import shutil
-import platform
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor
 
-load_dotenv()
-api_link = os.getenv("api_url")
 try:
-    import miniaudio  # Lightweight decoder/player, no external ffmpeg needed
+    import websocket
+    WEBSOCKET_AVAILABLE = True
+except ImportError:
+    WEBSOCKET_AVAILABLE = False
+    print("WebSocket support not available. Install with: pip install websocket-client rel")
+try:
+    from pydub import AudioSegment
+    PYDUB_AVAILABLE = True
+except ImportError:
+    PYDUB_AVAILABLE = False
+    print("Pydub not available. Install with: pip install pydub")
+
+try:
+    import miniaudio
     MINIAUDIO_AVAILABLE = True
-except Exception:
+except ImportError:
     MINIAUDIO_AVAILABLE = False
 
-# Load configuration
+# Load environment variables
+load_dotenv()
+API_URL = os.getenv("API_URL", os.getenv("URL"))
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
 def load_config(config_path: str = "config.json") -> dict:
     """Load configuration from JSON file"""
     try:
@@ -42,27 +73,9 @@ def load_config(config_path: str = "config.json") -> dict:
         logger.error(f"Error parsing config file: {e}")
         return {}
 
+
 CONFIG = load_config()
 
-# Configure logging
-logging.basicConfig(
-    level=getattr(logging, CONFIG.get('logging', {}).get('default_level', 'INFO')),
-    format=CONFIG.get('logging', {}).get('format', '%(asctime)s - %(levelname)s - %(message)s')
-)
-logger = logging.getLogger(__name__)
-
-# Configure FFmpeg  likely deprecated soon with websockets
-try:
-    ffmpeg_cfg = CONFIG.get('ffmpeg', {}) if isinstance(CONFIG, dict) else {}
-    ffmpeg_path = ffmpeg_cfg.get('ffmpeg_path')
-    ffprobe_path = ffmpeg_cfg.get('ffprobe_path')
-    if ffmpeg_path:
-        AudioSegment.converter = ffmpeg_path
-    if ffprobe_path:
-        AudioSegment.ffprobe = ffprobe_path
-except Exception as _e:
-    # Non-fatal; pydub will fallback to PATH
-    logger.debug(f"FFmpeg config not applied: {_e}")
 
 @dataclass
 class AudioData:
@@ -81,499 +94,500 @@ class AudioData:
     lat: Optional[float] = None
     lon: Optional[float] = None
     stamp: Optional[str] = None
+    priority: int = 0  # For priority queue handling
 
-class AudioStreamer:
-    """Handles real-time audio streaming from URLs"""
-    
+
+class AudioBuffer:
+    """Manages pre-fetched audio data for instant playback"""
+
+    def __init__(self, max_size: int = 10):
+        self.buffer = {}
+        self.max_size = max_size
+        self.executor = ThreadPoolExecutor(max_workers=3)
+        self.lock = threading.Lock()
+
+    def prefetch(self, audio_data: AudioData):
+        """Prefetch audio data in background"""
+        if len(self.buffer) >= self.max_size:
+            # Remove oldest entry
+            with self.lock:
+                if self.buffer:
+                    oldest = min(self.buffer.keys())
+                    del self.buffer[oldest]
+
+        self.executor.submit(self._fetch_audio, audio_data)
+
+    def _fetch_audio(self, audio_data: AudioData):
+        """Fetch and cache audio data"""
+        try:
+            response = requests.get(audio_data.url, timeout=10)
+            response.raise_for_status()
+            with self.lock:
+                self.buffer[audio_data.id] = response.content
+            logger.debug(f"Prefetched audio ID {audio_data.id}")
+        except Exception as e:
+            logger.warning(f"Failed to prefetch audio {audio_data.id}: {e}")
+
+    def get(self, audio_id: int) -> Optional[bytes]:
+        """Get cached audio data"""
+        with self.lock:
+            return self.buffer.get(audio_id)
+
+    def clear(self):
+        """Clear the buffer"""
+        with self.lock:
+            self.buffer.clear()
+
+
+class EnhancedAudioStreamer:
+    """Enhanced audio streaming with lower latency"""
+
     def __init__(self, volume: float = 1.0):
         self.volume = volume
         self.is_playing = False
-        self.buffer_size = 1024  # kept for potential future chunking
+        self.current_stream = None
 
-    def stream_audio(self, audio_data: bytes):
-        """Decode MP3 bytes to PCM and play."""
-        # Prefer miniaudio if available (no external binaries required)
-        if MINIAUDIO_AVAILABLE:
-            try:
-                decoder = miniaudio.Decoder(memory=audio_data)
-                # Start a playback device using decoder's output format
-                with miniaudio.PlaybackDevice(
-                    output_format=decoder.output_format,
-                    nchannels=decoder.nchannels,
-                    sample_rate=decoder.sample_rate,
-                ) as device:
-                    self.is_playing = True
-                    device.start(decoder)
-                    # Block until playback finishes
-                    while device.running and self.is_playing:
-                        time.sleep(0.05)
-                return
-            except Exception as e:
-                logger.warning(f"miniaudio playback failed, falling back to pydub: {e}")
+    def stream_audio_instant(self, audio_data: bytes) -> bool:
+        """Stream audio with minimal latency"""
+        try:
+            # Try miniaudio first (lowest latency)
+            if MINIAUDIO_AVAILABLE:
+                return self._play_miniaudio(audio_data)
 
-        # Fallback: decode via pydub (requires ffmpeg) and play via sounddevice
+            # Fallback to pydub/sounddevice
+            if PYDUB_AVAILABLE:
+                return self._play_pydub(audio_data)
+
+            logger.error("No audio backend available")
+            return False
+
+        except Exception as e:
+            logger.error(f"Error streaming audio: {e}")
+            return False
+
+    def _play_miniaudio(self, audio_data: bytes) -> bool:
+        """Play using miniaudio (low latency)"""
+        try:
+            decoder = miniaudio.decode(audio_data)
+            samples = decoder.samples
+
+            # Apply volume
+            samples = samples * self.volume
+
+            with miniaudio.PlaybackDevice(
+                output_format=miniaudio.SampleFormat.FLOAT32,
+                nchannels=decoder.nchannels,
+                sample_rate=decoder.sample_rate
+            ) as device:
+                self.is_playing = True
+                device.start(samples)
+                while device.callback_generator:
+                    time.sleep(0.01)
+
+            self.is_playing = False
+            return True
+        except Exception as e:
+            logger.warning(f"Miniaudio playback failed: {e}")
+            return False
+
+    def _play_pydub(self, audio_data: bytes) -> bool:
+        """Play using pydub/sounddevice"""
         try:
             audio = AudioSegment.from_mp3(io.BytesIO(audio_data))
+
+            # Convert to numpy array
             samples = np.array(audio.get_array_of_samples())
-            sample_width_bytes = audio.sample_width
-            if samples.dtype.kind != "f":
-                max_int = float(1 << (8 * sample_width_bytes - 1))
-                samples = samples.astype(np.float32) / max_int
+
+            if audio.sample_width == 2:
+                samples = samples.astype(np.float32) / 32768.0
             else:
-                samples = samples.astype(np.float32)
-            samples = samples.reshape((-1, audio.channels))
-            samples = np.clip(samples * self.volume, -1.0, 1.0)
+                samples = samples.astype(np.float32) / 128.0
+
+            # Reshape for channels
+            if audio.channels == 2:
+                samples = samples.reshape((-1, 2))
+
+            # Apply volume
+            samples = samples * self.volume
+
             self.is_playing = True
-            sd.play(samples, samplerate=audio.frame_rate)
-            sd.wait()
-        except (IOError, ValueError) as e:
-            logger.error(f"Error streaming audio: {e}")
-        finally:
+            sd.play(samples, samplerate=audio.frame_rate, blocking=True)
             self.is_playing = False
+            return True
+
+        except Exception as e:
+            logger.error(f"Pydub playback failed: {e}")
+            return False
 
     def stop(self):
-        """Stop audio playback"""
+        """Stop current playback"""
         self.is_playing = False
         try:
             sd.stop()
-        except Exception:
+        except:
             pass
 
-class LiveScanner:
-    
-    def __init__(self, 
-                 api_base_url: str = None,
-                 volume: float = None,
-                 fetch_interval: int = None,
-                 vfr_only: bool = None,
-                 playback_delay: float = None,
-                 geo_filter: bool = None,
-                 airports: List[str] = None):
-        """
-        Initialize the live scanner
-        
-        Args:
-            api_base_url: Base URL for the API (prod, dev, or local)
-            volume: Audio volume (0.0 to 1.0)
-            fetch_interval: How often to fetch new audio (seconds)
-            vfr_only: Only play VFR traffic
-            playback_delay: Delay between audio clips (seconds)
-            geo_filter: Enable geographic filtering for Albuquerque ARTCC
-            airports: List of specific airports to include (e.g. ['KTUS'])
-        """
-        defaults = CONFIG.get('default_settings', {})
-        
-        # Get API URL based on environment or use provided URL
-        if api_base_url is None:
-            api_env = defaults.get('api' ,'prod', "api_url")
-            api_base_url = CONFIG.get('api_environments', {}).get(api_env, api_env)
-            
-        self.api_base_url = api_base_url
-        self.volume = volume if volume is not None else defaults.get('volume', 0.7)
-        self.fetch_interval = fetch_interval if fetch_interval is not None else defaults.get('fetch_interval', 20)
-        self.vfr_only = vfr_only if vfr_only is not None else defaults.get('vfr_only', False)
-        self.playback_delay = playback_delay if playback_delay is not None else defaults.get('playback_delay', 0.5)
-        self.geo_filter = geo_filter if geo_filter is not None else defaults.get('geo_filter', False)
-        self.airports = airports if airports is not None else defaults.get('airports', [])
-        playback_cfg = CONFIG.get('playback', {}) if isinstance(CONFIG, dict) else {}
-        # Choose backend: 'system' | 'miniaudio' | 'pydub'
-        default_backend = 'system' if platform.system().lower().startswith('win') else ('miniaudio' if MINIAUDIO_AVAILABLE else 'pydub')
-        self.playback_backend = playback_cfg.get('backend', default_backend)
-        
-        # Albuquerque ARTCC (ZAB) approximate bounds
-        self.zab_bounds = CONFIG.get('zab_bounds', {
-            'north': 37.0,  # Northern New Mexico
-            'south': 31.0,  # Southern Arizona/New Mexico border
-            'east': -103.0, # Eastern New Mexico
-            'west': -114.0  # Western Arizona
-        })
-        
-        # State management
-        self.last_played_id = 0
-        self.audio_queue = queue.Queue()
-        self.is_running = False
-        self.is_playing = False
-        
-        # Initialize audio streamer
-        self.audio_streamer = AudioStreamer(volume=volume)
-        
-        #  pygame.mixer.music.load(temp_file)
-        #     pygame.mixer.music.set_volume(self.volume)
-        #     pygame.mixer.music.play()
-            
-        #     # Wait for playback to complete
-        #     while pygame.mixer.music.get_busy() and self.is_running:
-        #         time.sleep(0.1)
 
-        
+class RealtimeScanner:
+    """Enhanced scanner with real-time capabilities"""
+
+    def __init__(self,
+                 api_base_url: str = None,
+                 volume: float = 0.7,
+                 fetch_interval: int = 3,
+                 use_websocket: bool = True,
+                 prefetch_audio: bool = True,
+                 vfr_only: bool = False,
+                 geo_filter: bool = False,
+                 airports: List[str] = None):
+
+        self.api_base_url = api_base_url or API_URL
+        self.volume = volume
+        self.fetch_interval = fetch_interval
+        self.use_websocket = use_websocket and WEBSOCKET_AVAILABLE
+        self.prefetch_audio = prefetch_audio
+        self.vfr_only = vfr_only
+        self.geo_filter = geo_filter
+        self.airports = airports or []
+
+        # Audio components
+        self.audio_streamer = EnhancedAudioStreamer(volume=volume)
+        self.audio_buffer = AudioBuffer() if prefetch_audio else None
+
+        # Queue with priority support
+        self.audio_queue = queue.PriorityQueue()
+
+        # State
+        self.last_played_id = 0
+        self.is_running = False
+        self.ws = None
+
+        # Geographic bounds (Albuquerque ARTCC)
+        self.zab_bounds = CONFIG.get('zab_bounds', {
+            'north': 37.0,
+            'south': 31.0,
+            'east': -103.0,
+            'west': -114.0
+        })
+
+        # Threads
         self.fetch_thread = None
         self.play_thread = None
-        
-        logger.info(f"Scanner initialized with API: {self.api_base_url}")
-    
-    def fetch_audio_files(self) -> List[AudioData]:
-        """Fetch new audio files from the API"""
+
+        logger.info(f"Realtime Scanner initialized - WebSocket: {self.use_websocket}, Prefetch: {self.prefetch_audio}")
+
+    # def connect_websocket(self):
+    #
+    #     if not self.use_websocket:
+    #         return
+
+    #     ws_url = WS_URL.replace("https://", "wss://").replace("http://", "ws://")
+
+        # def on_message(message):
+        #     try:
+        #         data = json.loads(message)
+        #         if data.get('type') == 'audio':
+        #             audio_obj = self._parse_audio_data(data.get('data', {}))
+        #             if audio_obj:
+        #                 # Add with high priority for real-time data
+        #                 self.audio_queue.put((0, time.time(), audio_obj))
+        #                 if self.audio_buffer:
+        #                     self.audio_buffer.prefetch(audio_obj)
+        #                 logger.debug(f"Received real-time audio ID {audio_obj.id}")
+        #     except Exception as e:
+        #         logger.error(f"WebSocket message error: {e}")
+
+        # def on_error(ws, error):
+        #     logger.error(f"WebSocket error: {error}")
+
+        # def on_close(ws, close_status_code, close_msg):
+        #     logger.info("WebSocket closed")
+        #     if self.is_running:
+        #         time.sleep(5)
+        #         self.connect_websocket()  # Reconnect
+
+        # def on_open(ws):
+        #     logger.info("WebSocket connected")
+        #     # Send subscription message
+        #     ws.send(json.dumps({
+        #         'type': 'subscribe',
+        #         'last_id': self.last_played_id,
+        #         'filters': {
+        #             'vfr_only': self.vfr_only,
+        #             'airports': self.airports
+        #         }
+        #     }))
+
+        # try:
+        #     self.ws = websocket.WebSocketApp(ws_url,
+        #                                     on_open=on_open,
+        #                                     on_message=on_message,
+        #                                     on_error=on_error,
+        #                                     on_close=on_close)
+
+            # Run in background thread
+        #     ws_thread = threading.Thread(target=self.ws.run_forever, daemon=True)
+        #     ws_thread.start()
+        # except Exception as e:
+        #     logger.error(f"Failed to connect WebSocket: {e}")
+        #     self.use_websocket = False
+
+    def _parse_audio_data(self, item: dict) -> Optional[AudioData]:
+        """Parse API response to AudioData object"""
         try:
-            url = urljoin(self.api_base_url, f"/scanner/last?last={self.last_played_id}&limit=100")
-            
-            logger.debug(f"Fetching audio from: {url}")
+            return AudioData(
+                id=item.get('id', 0),
+                url=item.get('url', ''),
+                who_from=item.get('who_from', '-'),
+                frequency=item.get('frequency', '-'),
+                station_name=item.get('station_name', '-'),
+                pilot=f"[{item.get('flight_rules', 'UNK')}] {item.get('pilot', '-')}",
+                airport=item.get('airport', '-'),
+                position=item.get('position', '-'),
+                voice_name=item.get('voice_name', '-'),
+                from_userid=item.get('from_userid', '-'),
+                flight_rules=item.get('flight_rules', 'UNK'),
+                lat=item.get('lat'),
+                lon=item.get('lon'),
+                stamp=item.get('stamp')
+            )
+        except Exception as e:
+            logger.warning(f"Failed to parse audio item: {e}")
+            return None
+
+    def fetch_audio_batch(self) -> List[AudioData]:
+        try:
+            url = urljoin(self.api_base_url, f"/scanner/last?last={self.last_played_id}&limit=50")
             response = requests.get(url, timeout=10)
             response.raise_for_status()
-            
-            audio_data_list = response.json()
-            
-            if not audio_data_list:
-                logger.debug("No new audio data received")
-                return []
-            
-            # Convert to AudioData objects
-            audio_objects = []
-            for item in audio_data_list:
-                try:
-                    audio_obj = AudioData(
-                        id=item.get('id', 0),
-                        url=item.get('url', ''),
-                        who_from=item.get('who_from', '-'),
-                        frequency=item.get('frequency', '-'),
-                        station_name=item.get('station_name', '-'),
-                        pilot=f"[{item.get('flight_rules', 'UNK')}] {item.get('pilot', '-')}",
-                        airport=item.get('airport', '-'),
-                        position=item.get('position', '-'),
-                        voice_name=item.get('voice_name', '-'),
-                        from_userid=item.get('from_userid', '-'),
-                        flight_rules=item.get('flight_rules', 'UNK'),
-                        lat=item.get('lat'),
-                        lon=item.get('lon'),
-                        stamp=item.get('stamp')
-                    )
-                    audio_objects.append(audio_obj)
-                except Exception as e:
-                    logger.warning(f"Failed to parse audio item: {e}")
-                    continue
-            
-            if audio_objects:
-                self.last_played_id = audio_objects[-1].id
-                logger.info(f"Fetched {len(audio_objects)} new audio files")
-            
-            return audio_objects
-            
-        except requests.RequestException as e:
-            logger.error(f"Failed to fetch audio files: {e}")
-            return []
-        except (ValueError, TypeError) as e:
-            logger.error(f"Unexpected error fetching audio: {e}")
-            return []
-    
-    def reorder_audio_data(self, audio_list: List[AudioData]) -> List[AudioData]:
 
-        if len(audio_list) <= 1:
+            audio_list = []
+            for item in response.json():
+                audio_obj = self._parse_audio_data(item)
+                if audio_obj:
+                    audio_list.append(audio_obj)
+
+            if audio_list:
+                self.last_played_id = max(a.id for a in audio_list)
+                logger.info(f"Fetched {len(audio_list)} audio files")
+
             return audio_list
-        
-        reordered = audio_list.copy()
-        
-        i = 0
-        while i < len(reordered) - 1:
-            current_pilot = reordered[i].pilot
-            
-            # Look ahead for matching pilot (call/response)
-            j = i + 1
-            while j < len(reordered):
-                if reordered[j].pilot == current_pilot:
-                    # Move the matched item right after the current one
-                    matched_item = reordered.pop(j)
-                    reordered.insert(i + 1, matched_item)
-                    i += 1  # Skip the newly inserted item
-                    break
-                j += 1
-            i += 1
-        
-        return reordered
-    
+
+        except Exception as e:
+            logger.error(f"Failed to fetch audio: {e}")
+            return []
+
     def should_play_audio(self, audio: AudioData) -> bool:
-        """Determine if audio should be played based on filters"""
-        # VFR-only filter
+        """Apply filters to audio"""
         if self.vfr_only and audio.flight_rules != 'VFR':
-            logger.debug(f"Skipping non-VFR audio: {audio.flight_rules}")
             return False
-        
-        # URL validation
+
         if not audio.url or not audio.url.startswith('http'):
-            logger.warning(f"Invalid audio URL: {audio.url}")
             return False
-            
-        # Geographic filtering
+
         if self.geo_filter:
-            # Check if audio is from a specific airport we're interested in
             if audio.airport in self.airports:
                 return True
-                
-            # Check if coordinates are within Albuquerque ARTCC bounds
-            if audio.lat is not None and audio.lon is not None:
+
+            if audio.lat and audio.lon:
                 in_bounds = (
                     self.zab_bounds['south'] <= audio.lat <= self.zab_bounds['north'] and
                     self.zab_bounds['west'] <= audio.lon <= self.zab_bounds['east']
                 )
                 if not in_bounds:
-                    logger.debug(f"Skipping audio outside ZAB bounds: {audio.lat}, {audio.lon}")
                     return False
-            else:
-               #Failback to airport ICAO code as a filter, as the map seem
-                if audio.airport.startswith('K'):
-                    if not any(audio.airport == airport for airport in self.airports):
-                        logger.debug(f"Skipping audio from airport outside filter: {audio.airport}")
-                        return False
-        
+
         return True
-    
-    def play_audio_file(self, audio: AudioData) -> bool:
-        # Experimental implementation of real time audio from mp3 to raw 
+
+    def play_audio(self, audio: AudioData) -> bool:
+        """Play audio with minimal latency"""
         try:
             if not self.should_play_audio(audio):
                 return False
-            # Logging output for troubleshooting
-            logger.info(f"Playing audio ID {audio.id}: {audio.station_name} - {audio.pilot}")
-            logger.debug(f"Audio URL: {audio.url}")
 
-            # Display current transmission params
-            print(f" LIVE TRANSMISSION")
+            # Display transmission info
+            print(f"   LIVE TRANSMISSION")
             print(f"   Station: {audio.station_name}")
             print(f"   Frequency: {audio.frequency}")
-            print(f"   From: {audio.who_from}")
             print(f"   Pilot: {audio.pilot}")
             print(f"   Airport: {audio.airport}")
-            print(f"   Position: {audio.position}")
             if audio.lat and audio.lon:
                 print(f"   Location: {audio.lat:.4f}, {audio.lon:.4f}")
 
-            # If using system player backend, play the URL directly (no Python decode deps)
-            if self.playback_backend == 'system':
-                self._play_with_system_player(audio.url)
-            else:
-                # Download audio bytes and play via selected Python backend
-                response = requests.get(audio.url, timeout=30)
+            # Try buffer first
+            audio_bytes = None
+            if self.audio_buffer:
+                audio_bytes = self.audio_buffer.get(audio.id)
+
+            # Fetch if not in buffer
+            if not audio_bytes:
+                response = requests.get(audio.url, timeout=10)
                 response.raise_for_status()
                 audio_bytes = response.content
-                self.audio_streamer.stream_audio(audio_bytes)
 
-            return True
+            
+            return self.audio_streamer.stream_audio_instant(audio_bytes)
 
-        except requests.RequestException as e:
-            logger.error(f"Failed to download audio {audio.id}: {e}")
-            return False
-        except (IOError, ValueError) as e:
+        except Exception as e:
             logger.error(f"Failed to play audio {audio.id}: {e}")
             return False
 
-    def _play_with_system_player(self, url: str) -> None:
-        """Play an MP3 URL using system tools. Prefers ffplay if available; otherwise uses Windows Media Player via PowerShell on Windows."""
-        # Try ffplay first if present
-        ffplay_path = shutil.which('ffplay')
-        if ffplay_path is not None:
-            try:
-                subprocess.run([ffplay_path, '-nodisp', '-autoexit', '-loglevel', 'error', url],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                return
-            except Exception as e:
-                logger.debug(f"ffplay failed, falling back: {e}")
-
-        # Windows-specific fallback using WMP COM via PowerShell
-        if platform.system().lower().startswith('win'):
-            try:
-                # Escape single quotes for PowerShell single-quoted string
-                safe_url = url.replace("'", "''")
-                ps_script = (
-                    f"$wmp=New-Object -ComObject WMPlayer.OCX; "
-                    f"$m=$wmp.newMedia('{safe_url}'); "
-                    f"$wmp.currentPlaylist.Clear(); $wmp.currentPlaylist.appendItem($m); "
-                    f"$wmp.controls.play(); "
-                    f"while($wmp.playState -ne 1) {{ Start-Sleep -Milliseconds 100 }}; "
-                    f"$wmp.close()"
-                )
-                subprocess.run(['powershell', '-NoProfile', '-Command', ps_script],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                return
-            except Exception as e:
-                logger.error(f"Windows Media Player playback failed: {e}")
-        else:
-            # Non-Windows: Try common CLI players if available
-            for player_cmd in [['mpv', '--no-video', '--quiet', url], ['vlc', '--intf', 'dummy', '--play-and-exit', url], ['afplay', url]]:
-                if shutil.which(player_cmd[0]):
-                    try:
-                        subprocess.run(player_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                        return
-                    except Exception:
-                        continue
-        raise IOError('No system audio player available to play MP3 URL')
-    
     def audio_player_worker(self):
-        """Worker thread for playing audio from the queue"""
-        logger.info("Audio player thread started")
-        
+        logger.info("Audio player started")
+
         while self.is_running:
             try:
-                # Get audio from queue (with timeout to allow checking is_running)
+                # Get from priority queue (timeout for checking is_running)
                 try:
-                    audio = self.audio_queue.get(timeout=1.0)
+                    priority, timestamp, audio = self.audio_queue.get(timeout=0.5)
                 except queue.Empty:
                     continue
-                
-                self.is_playing = True
-                
+
                 # Play the audio
-                if self.play_audio_file(audio):
-                    # Add delay between clips
-                    if self.playback_delay > 0 and self.is_running:
-                        time.sleep(self.playback_delay)
-                
-                self.is_playing = False
+                if self.play_audio(audio):
+                    # Small delay between transmissions
+                    time.sleep(0.1)
+
                 self.audio_queue.task_done()
-                
-            except (IOError, ValueError) as e:
-                logger.error(f"Error in audio player worker: {e}")
-                self.is_playing = False
-    
+
+            except Exception as e:
+                logger.error(f"Player error: {e}")
+
     def audio_fetcher_worker(self):
-        logger.info("Audio fetcher thread started")
-        
+        """Worker thread for REST API fetching"""
+        logger.info("REST fetcher started")
+
         while self.is_running:
             try:
-                # Fetch new audio
-                audio_list = self.fetch_audio_files()
-                
-                if audio_list:
-                    # Reorder for better call/response flow
-                    audio_list = self.reorder_audio_data(audio_list)
-                    
+                if not self.use_websocket or not self.ws:
+                    # Fetch via REST API
+                    audio_list = self.fetch_audio_batch()
+
                     for audio in audio_list:
-                        if self.is_running:
-                            self.audio_queue.put(audio)
-                    
-                    logger.info(f"Added {len(audio_list)} audio files to queue")
-                
+                        # Add with normal priority
+                        self.audio_queue.put((1, time.time(), audio))
+
+                        # Prefetch if enabled
+                        if self.audio_buffer:
+                            self.audio_buffer.prefetch(audio)
+
                 # Wait before next fetch
-                for _ in range(self.fetch_interval):
-                    if not self.is_running:
-                        break
-                    time.sleep(1)
-                    
-            except (IOError, ValueError) as e:
-                logger.error(f"Error in audio fetcher worker: {e}")
-                time.sleep(5)  # Wait a bit before retrying
-    
+                time.sleep(self.fetch_interval)
+
+            except Exception as e:
+                logger.error(f"Fetcher error: {e}")
+                time.sleep(5)
+
     def start(self):
+        """Start the scanner"""
         if self.is_running:
-            logger.warning("Scanner is already running")
             return
-        
-        logger.info("Starting live scanner...")
+
+        logger.info("Starting Realtime Scanner...")
         self.is_running = True
-        
-        self.fetch_thread = threading.Thread(target=self.audio_fetcher_worker, daemon=True)
+
+        # Connect WebSocket if enabled
+        # if self.use_websocket:
+        #     self.connect_websocket()
+
+        # Start worker threads
         self.play_thread = threading.Thread(target=self.audio_player_worker, daemon=True)
-        
-        self.fetch_thread.start()
+        self.fetch_thread = threading.Thread(target=self.audio_fetcher_worker, daemon=True)
+
         self.play_thread.start()
-        
-        logger.info(" Live scanner is now running")
-        
-        try:
-            audio_list = self.fetch_audio_files()
-            if audio_list:
-                audio_list = self.reorder_audio_data(audio_list)
-                for audio in audio_list:
-                    self.audio_queue.put(audio)
-                logger.info(f"Initial load: {len(audio_list)} audio files queued")
-        except (IOError, ValueError) as e:
-            logger.error(f"Failed initial audio fetch: {e}")
-    
+        self.fetch_thread.start()
+
+        # Initial fetch
+        initial_audio = self.fetch_audio_batch()
+        for audio in initial_audio:
+            self.audio_queue.put((1, time.time(), audio))
+            if self.audio_buffer:
+                self.audio_buffer.prefetch(audio)
+
+        logger.info("✈️  Scanner is running!")
+
     def stop(self):
-        if not self.is_running:
-            return
-        
-        logger.info("Stopping live scanner...")
+        """Stop the scanner"""
+        logger.info("Stopping scanner...")
         self.is_running = False
-        
+
+        if self.ws:
+            self.ws.close()
+
+        if self.audio_buffer:
+            self.audio_buffer.clear()
+
         self.audio_streamer.stop()
-        
-        if self.fetch_thread and self.fetch_thread.is_alive():
-            self.fetch_thread.join(timeout=2)
-        if self.play_thread and self.play_thread.is_alive():
+
+        if self.play_thread:
             self.play_thread.join(timeout=2)
-        
-        logger.info("Live scanner stopped")
-    
+        if self.fetch_thread:
+            self.fetch_thread.join(timeout=2)
+
+        logger.info("Scanner stopped")
+
     def get_status(self) -> Dict:
         return {
             "running": self.is_running,
-            "playing": self.is_playing,
+            "playing": self.audio_streamer.is_playing,
             "queue_size": self.audio_queue.qsize(),
             "last_played_id": self.last_played_id,
-            "api_base_url": self.api_base_url,
-            "vfr_only": self.vfr_only,
-            "volume": self.volume
+            "websocket": "connected" if self.ws else "disconnected",
+            "prefetch": self.prefetch_audio,
+            "buffer_size": len(self.audio_buffer.buffer) if self.audio_buffer else 0
         }
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Live Aviation Scanner")
-    parser.add_argument("--config", type=str, default="config.json",
-                       help="Path to configuration file")
-    parser.add_argument("--api", choices=["prod", "dev", "local"],
-                       help="API environment to use (overrides config)")
-    parser.add_argument("--volume", type=float,
-                       help="Audio volume (0.0 to 1.0) (overrides config)")
-    parser.add_argument("--interval", type=int,
-                       help="Fetch interval in seconds (overrides config)")
-    parser.add_argument("--vfr-only", action="store_true",
-                       help="Only play VFR traffic (overrides config)")
-    parser.add_argument("--delay", type=float,
-                       help="Delay between audio clips in seconds (overrides config)")
-    parser.add_argument("--debug", action="store_true",
-                       help="Enable debug logging (overrides config)")
-    parser.add_argument("--geo-filter", action="store_true",
-                       help="Enable geographic filtering for Albuquerque ARTCC zone (overrides config)")
-    parser.add_argument("--airports", type=str, nargs="+",
-                       help="List of airports to include e.g. KTUS KABQ (overrides config)")
-    
+    parser = argparse.ArgumentParser(description="Real-Time Aviation Scanner")
+    parser.add_argument("--api", type=str, help="API base URL")
+    parser.add_argument("--volume", type=float, default=0.7, help="Volume (0.0-1.0)")
+    parser.add_argument("--interval", type=int, default=3, help="Fetch interval (seconds)")
+    parser.add_argument("--no-websocket", action="store_true", help="Disable WebSocket")
+    parser.add_argument("--no-prefetch", action="store_true", help="Disable audio prefetching")
+    parser.add_argument("--vfr-only", action="store_true", help="Only play VFR traffic")
+    parser.add_argument("--geo-filter", action="store_true", help="Enable geographic filtering")
+    parser.add_argument("--airports", nargs="+", help="Filter by airports (e.g. KTUS KABQ)")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+
     args = parser.parse_args()
-    
-    # Load config from specified file
-    global CONFIG
-    CONFIG = load_config(args.config)
-    
-    # Override config with command line arguments if provided
+
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
-    
-    # Get API URL based on environment
-    api_url = None
-    if args.api:
-        api_url = CONFIG.get('api_environments', {}).get(args.api)
-    
-    # Create scanner with command line arguments overriding config values
-    scanner = LiveScanner(
-        api_base_url=api_url,
+
+    # Create scanner
+    scanner = RealtimeScanner(
+        api_base_url=args.api,
         volume=args.volume,
         fetch_interval=args.interval,
-        vfr_only=args.vfr_only if args.vfr_only else None,
-        playback_delay=args.delay,
-        geo_filter=args.geo_filter if args.geo_filter else None,
+        use_websocket=not args.no_websocket,
+        prefetch_audio=not args.no_prefetch,
+        vfr_only=args.vfr_only,
+        geo_filter=args.geo_filter,
         airports=args.airports
     )
-    
+
     try:
         scanner.start()
-        
-        # Keep running until interrupted
+
+        print("\n✈️  Real-Time Aviation Scanner")
+        print("=" * 40)
+        print(f"API: {scanner.api_base_url}")
+        print(f"WebSocket: {'Enabled' if scanner.use_websocket else 'Disabled'}")
+        print(f"Prefetch: {'Enabled' if scanner.prefetch_audio else 'Disabled'}")
+        print(f"Volume: {scanner.volume}")
+        print("\nPress Ctrl+C to stop\n")
+
+        # Keep running
         while True:
             time.sleep(1)
-            
+
     except KeyboardInterrupt:
-        print("\n\nReceived interrupt signal...")
-    except (IOError, ValueError) as e:
-        logger.error(f"Unexpected error: {e}")
+        print("\n\nShutting down...")
     finally:
         scanner.stop()
-        print("Scanner stopped. Goodbye!")
+        print("Goodbye!")
+
 
 if __name__ == "__main__":
     main()

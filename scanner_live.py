@@ -31,11 +31,9 @@ from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor
 import dependencies.deps as deps 
 
-# Load environment variables
 load_dotenv()
 API_URL = os.getenv("API_URL", os.getenv("URL"))
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'

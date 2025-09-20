@@ -1,23 +1,17 @@
 #!/usr/bin/env python3
 
-#!/usr/bin/env python3
 """
 Enhanced Real-Time Aviation Scanner with WebSocket support
 Provides lower latency audio streaming and optional WebSocket connections
 """
 
 import os
-import platform
-import time
-import asyncio
-import platform
 import requests
 import time
 import threading
 import queue
 import argparse
-import asyncio
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 from urllib.parse import urljoin
 import logging
@@ -25,8 +19,6 @@ import sounddevice as sd
 import numpy as np
 import io
 import json
-from pathlib import Path
-import subprocess
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor
 import dependencies.deps as deps 
@@ -131,11 +123,11 @@ class EnhancedAudioStreamer:
         """Stream audio with minimal latency"""
         try:
             # Try miniaudio first (lowest latency)
-            if MINIAUDIO_AVAILABLE:
+            if deps.miniaudio:
                 return self._play_miniaudio(audio_data)
 
             # Fallback to pydub/sounddevice
-            if PYDUB_AVAILABLE:
+            if deps.pydub:
                 return self._play_pydub(audio_data)
 
             logger.error("No audio backend available")
@@ -173,7 +165,7 @@ class EnhancedAudioStreamer:
     def _play_pydub(self, audio_data: bytes) -> bool:
         """Play using pydub/sounddevice"""
         try:
-            audio =deps.audios.from_mp3(io.BytesIO(audio_data))
+            audio = deps.audios.from_mp3(io.BytesIO(audio_data))
 
             # Convert to numpy array
             samples = np.array(audio.get_array_of_samples())

@@ -29,25 +29,7 @@ from pathlib import Path
 import subprocess
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor
-
-try:
-    import websocket
-    WEBSOCKET_AVAILABLE = True
-except ImportError:
-    WEBSOCKET_AVAILABLE = False
-    print("WebSocket support not available. Install with: pip install websocket-client rel")
-try:
-    from pydub import AudioSegment
-    PYDUB_AVAILABLE = True
-except ImportError:
-    PYDUB_AVAILABLE = False
-    print("Pydub not available. Install with: pip install pydub")
-
-try:
-    import miniaudio
-    MINIAUDIO_AVAILABLE = True
-except ImportError:
-    MINIAUDIO_AVAILABLE = False
+import dependencies.deps as deps 
 
 # Load environment variables
 load_dotenv()
@@ -168,14 +150,14 @@ class EnhancedAudioStreamer:
     def _play_miniaudio(self, audio_data: bytes) -> bool:
         """Play using miniaudio (low latency)"""
         try:
-            decoder = miniaudio.decode(audio_data)
+            decoder = deps.miniaudio.decode(audio_data)
             samples = decoder.samples
 
             # Apply volume
             samples = samples * self.volume
 
-            with miniaudio.PlaybackDevice(
-                output_format=miniaudio.SampleFormat.FLOAT32,
+            with deps.miniaudio.PlaybackDevice(
+                output_format=deps.miniaudio.SampleFormat.FLOAT32,
                 nchannels=decoder.nchannels,
                 sample_rate=decoder.sample_rate
             ) as device:
@@ -193,7 +175,7 @@ class EnhancedAudioStreamer:
     def _play_pydub(self, audio_data: bytes) -> bool:
         """Play using pydub/sounddevice"""
         try:
-            audio = AudioSegment.from_mp3(io.BytesIO(audio_data))
+            audio =deps.audios.from_mp3(io.BytesIO(audio_data))
 
             # Convert to numpy array
             samples = np.array(audio.get_array_of_samples())
@@ -244,7 +226,7 @@ class RealtimeScanner:
         self.api_base_url = api_base_url or API_URL
         self.volume = volume
         self.fetch_interval = fetch_interval
-        self.use_websocket = use_websocket and WEBSOCKET_AVAILABLE
+        self.use_websocket = use_websocket and deps.websocket
         self.prefetch_audio = prefetch_audio
         self.vfr_only = vfr_only
         self.geo_filter = geo_filter
@@ -333,7 +315,6 @@ class RealtimeScanner:
         #     self.use_websocket = False
 
     def _parse_audio_data(self, item: dict) -> Optional[AudioData]:
-        """Parse API response to AudioData object"""
         try:
             return AudioData(
                 id=item.get('id', 0),

@@ -163,7 +163,7 @@ class EnhancedAudioStreamer:
             return False
 
     def _play_pydub(self, audio_data: bytes) -> bool:
-        """Play using pydub/sounddevice"""
+        
         try:
             audio = deps.audios.from_mp3(io.BytesIO(audio_data))
 

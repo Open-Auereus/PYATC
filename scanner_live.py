@@ -1,23 +1,17 @@
 #!/usr/bin/env python3
 
-#!/usr/bin/env python3
 """
 Enhanced Real-Time Aviation Scanner with WebSocket support
 Provides lower latency audio streaming and optional WebSocket connections
 """
 
 import os
-import platform
-import time
-import asyncio
-import platform
 import requests
 import time
 import threading
 import queue
 import argparse
-import asyncio
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 from urllib.parse import urljoin
 import logging
@@ -25,35 +19,13 @@ import sounddevice as sd
 import numpy as np
 import io
 import json
-from pathlib import Path
-import subprocess
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor
+from dependencies.deps import deps 
 
-try:
-    import websocket
-    WEBSOCKET_AVAILABLE = True
-except ImportError:
-    WEBSOCKET_AVAILABLE = False
-    print("WebSocket support not available. Install with: pip install websocket-client rel")
-try:
-    from pydub import AudioSegment
-    PYDUB_AVAILABLE = True
-except ImportError:
-    PYDUB_AVAILABLE = False
-    print("Pydub not available. Install with: pip install pydub")
-
-try:
-    import miniaudio
-    MINIAUDIO_AVAILABLE = True
-except ImportError:
-    MINIAUDIO_AVAILABLE = False
-
-# Load environment variables
 load_dotenv()
 API_URL = os.getenv("API_URL", os.getenv("URL"))
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -151,11 +123,11 @@ class EnhancedAudioStreamer:
         """Stream audio with minimal latency"""
         try:
             # Try miniaudio first (lowest latency)
-            if MINIAUDIO_AVAILABLE:
+            if deps.miniaudio_available:
                 return self._play_miniaudio(audio_data)
 
             # Fallback to pydub/sounddevice
-            if PYDUB_AVAILABLE:
+            if deps.pydub_available:
                 return self._play_pydub(audio_data)
 
             logger.error("No audio backend available")
@@ -166,16 +138,19 @@ class EnhancedAudioStreamer:
             return False
 
     def _play_miniaudio(self, audio_data: bytes) -> bool:
-        """Play using miniaudio (low latency)"""
         try:
-            decoder = miniaudio.decode(audio_data)
+            if not deps.miniaudio:
+                logger.warning("Miniaudio module not available")
+                return False
+
+            decoder = deps.miniaudio.decode(audio_data)
             samples = decoder.samples
 
             # Apply volume
             samples = samples * self.volume
 
-            with miniaudio.PlaybackDevice(
-                output_format=miniaudio.SampleFormat.FLOAT32,
+            with deps.miniaudio.PlaybackDevice(
+                output_format=deps.miniaudio.SampleFormat.FLOAT32,
                 nchannels=decoder.nchannels,
                 sample_rate=decoder.sample_rate
             ) as device:
@@ -191,9 +166,13 @@ class EnhancedAudioStreamer:
             return False
 
     def _play_pydub(self, audio_data: bytes) -> bool:
-        """Play using pydub/sounddevice"""
+        
         try:
-            audio = AudioSegment.from_mp3(io.BytesIO(audio_data))
+            if not deps.AudioSegment:
+                logger.warning("Pydub AudioSegment not available")
+                return False
+
+            audio = deps.AudioSegment.from_mp3(io.BytesIO(audio_data))
 
             # Convert to numpy array
             samples = np.array(audio.get_array_of_samples())
@@ -220,7 +199,6 @@ class EnhancedAudioStreamer:
             return False
 
     def stop(self):
-        """Stop current playback"""
         self.is_playing = False
         try:
             sd.stop()
@@ -229,7 +207,6 @@ class EnhancedAudioStreamer:
 
 
 class RealtimeScanner:
-    """Enhanced scanner with real-time capabilities"""
 
     def __init__(self,
                  api_base_url: str = None,
@@ -244,25 +221,21 @@ class RealtimeScanner:
         self.api_base_url = api_base_url or API_URL
         self.volume = volume
         self.fetch_interval = fetch_interval
-        self.use_websocket = use_websocket and WEBSOCKET_AVAILABLE
+        self.use_websocket = use_websocket and deps.websocket_available
         self.prefetch_audio = prefetch_audio
         self.vfr_only = vfr_only
         self.geo_filter = geo_filter
         self.airports = airports or []
 
-        # Audio components
         self.audio_streamer = EnhancedAudioStreamer(volume=volume)
         self.audio_buffer = AudioBuffer() if prefetch_audio else None
 
-        # Queue with priority support
         self.audio_queue = queue.PriorityQueue()
 
-        # State
         self.last_played_id = 0
         self.is_running = False
         self.ws = None
 
-        # Geographic bounds (Albuquerque ARTCC)
         self.zab_bounds = CONFIG.get('zab_bounds', {
             'north': 37.0,
             'south': 31.0,
@@ -276,64 +249,8 @@ class RealtimeScanner:
 
         logger.info(f"Realtime Scanner initialized - WebSocket: {self.use_websocket}, Prefetch: {self.prefetch_audio}")
 
-    # def connect_websocket(self):
-    #
-    #     if not self.use_websocket:
-    #         return
-
-    #     ws_url = WS_URL.replace("https://", "wss://").replace("http://", "ws://")
-
-        # def on_message(message):
-        #     try:
-        #         data = json.loads(message)
-        #         if data.get('type') == 'audio':
-        #             audio_obj = self._parse_audio_data(data.get('data', {}))
-        #             if audio_obj:
-        #                 # Add with high priority for real-time data
-        #                 self.audio_queue.put((0, time.time(), audio_obj))
-        #                 if self.audio_buffer:
-        #                     self.audio_buffer.prefetch(audio_obj)
-        #                 logger.debug(f"Received real-time audio ID {audio_obj.id}")
-        #     except Exception as e:
-        #         logger.error(f"WebSocket message error: {e}")
-
-        # def on_error(ws, error):
-        #     logger.error(f"WebSocket error: {error}")
-
-        # def on_close(ws, close_status_code, close_msg):
-        #     logger.info("WebSocket closed")
-        #     if self.is_running:
-        #         time.sleep(5)
-        #         self.connect_websocket()  # Reconnect
-
-        # def on_open(ws):
-        #     logger.info("WebSocket connected")
-        #     # Send subscription message
-        #     ws.send(json.dumps({
-        #         'type': 'subscribe',
-        #         'last_id': self.last_played_id,
-        #         'filters': {
-        #             'vfr_only': self.vfr_only,
-        #             'airports': self.airports
-        #         }
-        #     }))
-
-        # try:
-        #     self.ws = websocket.WebSocketApp(ws_url,
-        #                                     on_open=on_open,
-        #                                     on_message=on_message,
-        #                                     on_error=on_error,
-        #                                     on_close=on_close)
-
-            # Run in background thread
-        #     ws_thread = threading.Thread(target=self.ws.run_forever, daemon=True)
-        #     ws_thread.start()
-        # except Exception as e:
-        #     logger.error(f"Failed to connect WebSocket: {e}")
-        #     self.use_websocket = False
-
+   
     def _parse_audio_data(self, item: dict) -> Optional[AudioData]:
-        """Parse API response to AudioData object"""
         try:
             return AudioData(
                 id=item.get('id', 0),

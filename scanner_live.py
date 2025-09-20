@@ -21,7 +21,7 @@ import io
 import json
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor
-import dependencies.deps as deps 
+from dependencies.deps import deps 
 
 load_dotenv()
 API_URL = os.getenv("API_URL", os.getenv("URL"))
@@ -123,11 +123,11 @@ class EnhancedAudioStreamer:
         """Stream audio with minimal latency"""
         try:
             # Try miniaudio first (lowest latency)
-            if deps.miniaudio:
+            if deps.miniaudio_available:
                 return self._play_miniaudio(audio_data)
 
             # Fallback to pydub/sounddevice
-            if deps.pydub:
+            if deps.pydub_available:
                 return self._play_pydub(audio_data)
 
             logger.error("No audio backend available")
@@ -139,6 +139,10 @@ class EnhancedAudioStreamer:
 
     def _play_miniaudio(self, audio_data: bytes) -> bool:
         try:
+            if not deps.miniaudio:
+                logger.warning("Miniaudio module not available")
+                return False
+
             decoder = deps.miniaudio.decode(audio_data)
             samples = decoder.samples
 
@@ -164,7 +168,11 @@ class EnhancedAudioStreamer:
     def _play_pydub(self, audio_data: bytes) -> bool:
         
         try:
-            audio = deps.audios.from_mp3(io.BytesIO(audio_data))
+            if not deps.AudioSegment:
+                logger.warning("Pydub AudioSegment not available")
+                return False
+
+            audio = deps.AudioSegment.from_mp3(io.BytesIO(audio_data))
 
             # Convert to numpy array
             samples = np.array(audio.get_array_of_samples())
@@ -213,25 +221,21 @@ class RealtimeScanner:
         self.api_base_url = api_base_url or API_URL
         self.volume = volume
         self.fetch_interval = fetch_interval
-        self.use_websocket = use_websocket and deps.websocket
+        self.use_websocket = use_websocket and deps.websocket_available
         self.prefetch_audio = prefetch_audio
         self.vfr_only = vfr_only
         self.geo_filter = geo_filter
         self.airports = airports or []
 
-        # Audio components
         self.audio_streamer = EnhancedAudioStreamer(volume=volume)
         self.audio_buffer = AudioBuffer() if prefetch_audio else None
 
-        # Queue with priority support
         self.audio_queue = queue.PriorityQueue()
 
-        # State
         self.last_played_id = 0
         self.is_running = False
         self.ws = None
 
-        # Geographic bounds (Albuquerque ARTCC)
         self.zab_bounds = CONFIG.get('zab_bounds', {
             'north': 37.0,
             'south': 31.0,

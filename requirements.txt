@@ -1,0 +1,15 @@
+# Core dependencies
+requests>=2.31.0
+python-dotenv>=1.0.0
+numpy>=1.24.0
+sounddevice>=0.4.6
+
+# Optional audio backends (uncomment as needed)
+# pydub>=0.25.1
+# miniaudio>=1.59
+
+# Optional WebSocket support (uncomment if needed)
+# websocket-client>=1.6.0
+
+# Required for pydub MP3 support
+# ffmpeg-python>=0.2.0  # or install ffmpeg separately

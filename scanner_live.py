@@ -138,7 +138,6 @@ class EnhancedAudioStreamer:
             return False
 
     def _play_miniaudio(self, audio_data: bytes) -> bool:
-        """Play using miniaudio (low latency)"""
         try:
             decoder = deps.miniaudio.decode(audio_data)
             samples = decoder.samples
@@ -192,7 +191,6 @@ class EnhancedAudioStreamer:
             return False
 
     def stop(self):
-        """Stop current playback"""
         self.is_playing = False
         try:
             sd.stop()
@@ -201,7 +199,6 @@ class EnhancedAudioStreamer:
 
 
 class RealtimeScanner:
-    """Enhanced scanner with real-time capabilities"""
 
     def __init__(self,
                  api_base_url: str = None,
@@ -248,62 +245,7 @@ class RealtimeScanner:
 
         logger.info(f"Realtime Scanner initialized - WebSocket: {self.use_websocket}, Prefetch: {self.prefetch_audio}")
 
-    # def connect_websocket(self):
-    #
-    #     if not self.use_websocket:
-    #         return
-
-    #     ws_url = WS_URL.replace("https://", "wss://").replace("http://", "ws://")
-
-        # def on_message(message):
-        #     try:
-        #         data = json.loads(message)
-        #         if data.get('type') == 'audio':
-        #             audio_obj = self._parse_audio_data(data.get('data', {}))
-        #             if audio_obj:
-        #                 # Add with high priority for real-time data
-        #                 self.audio_queue.put((0, time.time(), audio_obj))
-        #                 if self.audio_buffer:
-        #                     self.audio_buffer.prefetch(audio_obj)
-        #                 logger.debug(f"Received real-time audio ID {audio_obj.id}")
-        #     except Exception as e:
-        #         logger.error(f"WebSocket message error: {e}")
-
-        # def on_error(ws, error):
-        #     logger.error(f"WebSocket error: {error}")
-
-        # def on_close(ws, close_status_code, close_msg):
-        #     logger.info("WebSocket closed")
-        #     if self.is_running:
-        #         time.sleep(5)
-        #         self.connect_websocket()  # Reconnect
-
-        # def on_open(ws):
-        #     logger.info("WebSocket connected")
-        #     # Send subscription message
-        #     ws.send(json.dumps({
-        #         'type': 'subscribe',
-        #         'last_id': self.last_played_id,
-        #         'filters': {
-        #             'vfr_only': self.vfr_only,
-        #             'airports': self.airports
-        #         }
-        #     }))
-
-        # try:
-        #     self.ws = websocket.WebSocketApp(ws_url,
-        #                                     on_open=on_open,
-        #                                     on_message=on_message,
-        #                                     on_error=on_error,
-        #                                     on_close=on_close)
-
-            # Run in background thread
-        #     ws_thread = threading.Thread(target=self.ws.run_forever, daemon=True)
-        #     ws_thread.start()
-        # except Exception as e:
-        #     logger.error(f"Failed to connect WebSocket: {e}")
-        #     self.use_websocket = False
-
+   
     def _parse_audio_data(self, item: dict) -> Optional[AudioData]:
         try:
             return AudioData(

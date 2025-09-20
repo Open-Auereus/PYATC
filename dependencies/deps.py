@@ -1,34 +1,50 @@
-def websocket_available():
-    try:
-        import websocket
-        WEBSOCKET_AVAILABLE = True
-    except ImportError:
-        WEBSOCKET_AVAILABLE = False
-        print("WebSocket support not available. Install with: pip install websocket-client rel")
-    try:
-        from pydub import AudioSegment
-        PYDUB_AVAILABLE = True
-    except ImportError:
-        PYDUB_AVAILABLE = False
-        print("Pydub not available. Install with: pip install pydub")
+from typing import Optional, Any
 
-    try:
-        from pydub import miniaudio
-        MINIAUDIO_AVAILABLE = True
-    except ImportError:
-        MINIAUDIO_AVAILABLE = False
+class OptionalDependencies:
+    """Manages optional dependencies with graceful fallback"""
 
-    # Create a simple object to hold our values
-    class Deps:
-        def __init__(self):
-            self.websocket = WEBSOCKET_AVAILABLE
-            self.pydub = PYDUB_AVAILABLE
-            self.miniaudio = MINIAUDIO_AVAILABLE
-            self.audios = AudioSegment if PYDUB_AVAILABLE else None
-    
-    return Deps()
+    websocket: Optional[Any] = None
+    websocket_available: bool = False
+    AudioSegment: Optional[Any] = None
+    pydub_available: bool = False
+    miniaudio: Optional[Any] = None
+    miniaudio_available: bool = False
 
-deps = websocket_available()
-MINIAUDIO_AVAILABLE = deps.miniaudio
-PYDUB_AVAILABLE = deps.pydub
-WEBSOCKET_AVAILABLE = deps.websocket
+    def __init__(self):
+        # WebSocket support
+        try:
+            import websocket
+            self.websocket_available = True
+            self.websocket = websocket
+        except ImportError:
+            self.websocket_available = False
+            self.websocket = None
+            print("WebSocket support not available. Install with: pip install websocket-client")
+
+        # Pydub support
+        try:
+            from pydub import AudioSegment
+            self.pydub_available = True
+            self.AudioSegment = AudioSegment
+        except ImportError:
+            self.pydub_available = False
+            self.AudioSegment = None
+            print("Pydub not available. Install with: pip install pydub")
+
+        # Miniaudio support
+        try:
+            import miniaudio
+            self.miniaudio_available = True
+            self.miniaudio = miniaudio
+        except ImportError:
+            self.miniaudio_available = False
+            self.miniaudio = None
+            print("Miniaudio not available. Install with: pip install miniaudio")
+
+# Create singleton instance
+deps = OptionalDependencies()
+
+# Export for backward compatibility
+WEBSOCKET_AVAILABLE = deps.websocket_available
+PYDUB_AVAILABLE = deps.pydub_available
+MINIAUDIO_AVAILABLE = deps.miniaudio_available

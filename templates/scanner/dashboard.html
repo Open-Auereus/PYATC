@@ -1,0 +1,211 @@
+{% extends 'base.html' %}
+
+{% block title %}Dashboard - Aviation Scanner{% endblock %}
+
+{% block extra_css %}
+<style>
+    .dashboard-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 24px;
+        margin-bottom: 32px;
+    }
+
+    .stat-card {
+        background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-tertiary) 100%);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 24px;
+        text-align: center;
+    }
+
+    .stat-value {
+        font-size: 48px;
+        font-weight: 700;
+        margin: 16px 0;
+    }
+
+    .stat-label {
+        font-size: 14px;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    .transmissions-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .transmissions-table th {
+        background: var(--bg-tertiary);
+        padding: 12px;
+        text-align: left;
+        font-weight: 600;
+        border-bottom: 2px solid var(--border);
+    }
+
+    .transmissions-table td {
+        padding: 12px;
+        border-bottom: 1px solid var(--border);
+    }
+
+    .transmissions-table tr:hover {
+        background: var(--bg-tertiary);
+    }
+
+    .flight-rules-badge {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 700;
+    }
+
+    .flight-rules-vfr {
+        background: #10b98120;
+        color: var(--success);
+    }
+
+    .flight-rules-ifr {
+        background: #2563eb20;
+        color: var(--primary);
+    }
+
+    .flight-rules-unk {
+        background: #64748b20;
+        color: var(--text-secondary);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 32px; font-size: 32px;">Dashboard</h1>
+
+<div class="dashboard-grid">
+    <div class="stat-card">
+        <div class="stat-label">Scanner Status</div>
+        <div class="stat-value">
+            {% if status.running %}
+                <span style="color: var(--success);">●</span>
+            {% else %}
+                <span style="color: var(--danger);">●</span>
+            {% endif %}
+        </div>
+        <div class="stat-label">
+            {% if status.running %}Running{% else %}Stopped{% endif %}
+        </div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-label">Queue Size</div>
+        <div class="stat-value" style="color: var(--primary);">{{ status.queue_size }}</div>
+        <div class="stat-label">Pending Transmissions</div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-label">Last Transmission ID</div>
+        <div class="stat-value" style="color: var(--success);">{{ status.last_played_id }}</div>
+        <div class="stat-label">Most Recent</div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Recent Transmissions</h2>
+    <div style="overflow-x: auto;">
+        <table class="transmissions-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Station</th>
+                    <th>Frequency</th>
+                    <th>Pilot</th>
+                    <th>Airport</th>
+                    <th>Rules</th>
+                    <th>Time</th>
+                </tr>
+            </thead>
+            <tbody id="transmissionsBody">
+                {% for t in recent_transmissions %}
+                <tr>
+                    <td>#{{ t.transmission_id }}</td>
+                    <td>{{ t.station_name }}</td>
+                    <td>{{ t.frequency }}</td>
+                    <td>{{ t.pilot }}</td>
+                    <td>{{ t.airport }}</td>
+                    <td>
+                        <span class="flight-rules-badge flight-rules-{{ t.flight_rules|lower }}">
+                            {{ t.flight_rules }}
+                        </span>
+                    </td>
+                    <td>{{ t.timestamp|date:"Y-m-d H:i:s" }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="7" style="text-align: center; color: var(--text-secondary);">
+                        No transmissions yet
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <h2>System Information</h2>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px;">
+        <div>
+            <div class="stat-label">Fetch Interval</div>
+            <div style="font-size: 24px; font-weight: 700; margin-top: 8px;">
+                {{ status.settings.fetch_interval|default:"20" }}s
+            </div>
+        </div>
+        <div>
+            <div class="stat-label">Volume Level</div>
+            <div style="font-size: 24px; font-weight: 700; margin-top: 8px;">
+                {{ status.settings.volume|default:"0.7" }}
+            </div>
+        </div>
+        <div>
+            <div class="stat-label">VFR Only</div>
+            <div style="font-size: 24px; font-weight: 700; margin-top: 8px;">
+                {% if status.settings.vfr_only %}Yes{% else %}No{% endif %}
+            </div>
+        </div>
+        <div>
+            <div class="stat-label">Geo Filter</div>
+            <div style="font-size: 24px; font-weight: 700; margin-top: 8px;">
+                {% if status.settings.geo_filter %}Enabled{% else %}Disabled{% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    function updateDashboard() {
+        fetch('/api/status/')
+            .then(r => r.json())
+            .then(data => {
+                // Update status indicator
+                const statusDot = document.querySelector('.stat-value span');
+                const statusLabel = document.querySelector('.stat-value').nextElementSibling;
+                if (data.running) {
+                    statusDot.style.color = 'var(--success)';
+                    statusLabel.textContent = 'Running';
+                } else {
+                    statusDot.style.color = 'var(--danger)';
+                    statusLabel.textContent = 'Stopped';
+                }
+                // Update queue size and last transmission ID
+                document.querySelectorAll('.stat-value')[1].textContent = data.queue_size;
+                document.querySelectorAll('.stat-value')[2].textContent = data.last_played_id;
+            })
+            .catch(err => console.error('Error:', err));
+    }
+
+    setInterval(updateDashboard, 30000);
+</script>
+{% endblock %}

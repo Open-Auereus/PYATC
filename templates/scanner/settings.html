@@ -1,0 +1,303 @@
+{% extends 'base.html' %}
+
+{% block title %}Settings - Aviation Scanner{% endblock %}
+
+{% block extra_css %}
+<style>
+    .settings-form {
+        max-width: 800px;
+    }
+
+    .form-group {
+        margin-bottom: 24px;
+    }
+
+    .form-group label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+
+    .form-group input[type="number"],
+    .form-group input[type="text"],
+    .form-group select {
+        width: 100%;
+        padding: 12px;
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text-primary);
+        font-size: 16px;
+    }
+
+    .form-group input[type="number"]:focus,
+    .form-group input[type="text"]:focus,
+    .form-group select:focus {
+        outline: none;
+        border-color: var(--primary);
+    }
+
+    .form-group small {
+        display: block;
+        margin-top: 4px;
+        color: var(--text-secondary);
+        font-size: 13px;
+    }
+
+    .checkbox-group {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .checkbox-group input[type="checkbox"] {
+        width: 20px;
+        height: 20px;
+        cursor: pointer;
+    }
+
+    .tag-input-container {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 8px;
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        min-height: 48px;
+    }
+
+    .tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 12px;
+        background: var(--primary);
+        color: white;
+        border-radius: 6px;
+        font-size: 14px;
+    }
+
+    .tag button {
+        background: none;
+        border: none;
+        color: white;
+        cursor: pointer;
+        font-size: 16px;
+        padding: 0;
+        display: flex;
+        align-items: center;
+    }
+
+    .tag-input {
+        flex: 1;
+        min-width: 120px;
+        background: transparent;
+        border: none;
+        color: var(--text-primary);
+        padding: 6px;
+        font-size: 14px;
+    }
+
+    .tag-input:focus {
+        outline: none;
+    }
+
+    .button-group {
+        display: flex;
+        gap: 12px;
+        margin-top: 32px;
+    }
+
+    .alert {
+        padding: 16px;
+        border-radius: 8px;
+        margin-bottom: 24px;
+        display: none;
+    }
+
+    .alert-success {
+        background: #10b98120;
+        border: 1px solid var(--success);
+        color: var(--success);
+    }
+
+    .alert-error {
+        background: #ef444420;
+        border: 1px solid var(--danger);
+        color: var(--danger);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 32px; font-size: 32px;">Scanner Settings</h1>
+
+<div id="alertBox" class="alert"></div>
+
+<div class="card settings-form">
+    <form id="settingsForm">
+        <div class="form-group">
+            <label for="volume">Volume (0.0 - 1.0)</label>
+            <input type="number" id="volume" name="volume" min="0" max="1" step="0.1" value="{{ settings.volume }}" required>
+            <small>Audio playback volume level</small>
+        </div>
+
+        <div class="form-group">
+            <label for="fetch_interval">Fetch Interval (seconds)</label>
+            <input type="number" id="fetch_interval" name="fetch_interval" min="1" max="120" value="{{ settings.fetch_interval }}" required>
+            <small>How often to check for new transmissions</small>
+        </div>
+
+        <div class="form-group">
+            <div class="checkbox-group">
+                <input type="checkbox" id="vfr_only" name="vfr_only" {% if settings.vfr_only %}checked{% endif %}>
+                <label for="vfr_only" style="margin: 0;">VFR Only</label>
+            </div>
+            <small>Only play Visual Flight Rules transmissions</small>
+        </div>
+
+        <div class="form-group">
+            <div class="checkbox-group">
+                <input type="checkbox" id="geo_filter" name="geo_filter" {% if settings.geo_filter %}checked{% endif %}>
+                <label for="geo_filter" style="margin: 0;">Geographic Filter</label>
+            </div>
+            <small>Filter transmissions by geographic bounds (Albuquerque ARTCC)</small>
+        </div>
+
+        <div class="form-group">
+            <div class="checkbox-group">
+                <input type="checkbox" id="prefetch_audio" name="prefetch_audio" {% if settings.prefetch_audio %}checked{% endif %}>
+                <label for="prefetch_audio" style="margin: 0;">Prefetch Audio</label>
+            </div>
+            <small>Pre-download audio for faster playback</small>
+        </div>
+
+        <div class="form-group">
+            <label for="airports">Airport Filter</label>
+            <div class="tag-input-container" id="airportTags">
+                <input type="text" class="tag-input" id="airportInput" placeholder="Type airport code and press Enter">
+            </div>
+            <small>Filter by specific airports (e.g., KTUS, KABQ). Press Enter to add.</small>
+        </div>
+
+        <div class="button-group">
+            <button type="submit" class="btn btn-primary">Save Settings</button>
+            <button type="button" class="btn btn-danger" onclick="resetForm()">Reset</button>
+        </div>
+    </form>
+</div>
+
+<div class="card" style="margin-top: 24px;">
+    <h2>Geographic Bounds (Albuquerque ARTCC)</h2>
+    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px;">
+        <div>
+            <div class="stat-label">North Latitude</div>
+            <div style="font-size: 24px; font-weight: 700; margin-top: 8px;">37.0°</div>
+        </div>
+        <div>
+            <div class="stat-label">South Latitude</div>
+            <div style="font-size: 24px; font-weight: 700; margin-top: 8px;">31.0°</div>
+        </div>
+        <div>
+            <div class="stat-label">East Longitude</div>
+            <div style="font-size: 24px; font-weight: 700; margin-top: 8px;">-103.0°</div>
+        </div>
+        <div>
+            <div class="stat-label">West Longitude</div>
+            <div style="font-size: 24px; font-weight: 700; margin-top: 8px;">-114.0°</div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let airports = {{ settings.airports|safe }};
+
+    function renderAirportTags() {
+        const container = document.getElementById('airportTags');
+        const input = document.getElementById('airportInput');
+
+        container.innerHTML = '';
+
+        airports.forEach((airport, index) => {
+            const tag = document.createElement('div');
+            tag.className = 'tag';
+            tag.innerHTML = `
+                ${airport}
+                <button onclick="removeAirport(${index})" type="button">×</button>
+            `;
+            container.appendChild(tag);
+        });
+
+        container.appendChild(input);
+    }
+
+    function removeAirport(index) {
+        airports.splice(index, 1);
+        renderAirportTags();
+    }
+
+    document.getElementById('airportInput').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const value = this.value.trim().toUpperCase();
+            if (value && !airports.includes(value)) {
+                airports.push(value);
+                renderAirportTags();
+                this.value = '';
+            }
+        }
+    });
+
+    document.getElementById('settingsForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+
+        const settings = {
+            volume: parseFloat(document.getElementById('volume').value),
+            fetch_interval: parseInt(document.getElementById('fetch_interval').value),
+            vfr_only: document.getElementById('vfr_only').checked,
+            geo_filter: document.getElementById('geo_filter').checked,
+            prefetch_audio: document.getElementById('prefetch_audio').checked,
+            airports: airports
+        };
+
+        fetch('/api/settings/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(settings)
+        })
+        .then(r => r.json())
+        .then(data => {
+            showAlert('Settings saved successfully!', 'success');
+        })
+        .catch(err => {
+            showAlert('Error saving settings', 'error');
+            console.error('Error:', err);
+        });
+    });
+
+    function showAlert(message, type) {
+        const alert = document.getElementById('alertBox');
+        alert.textContent = message;
+        alert.className = `alert alert-${type}`;
+        alert.style.display = 'block';
+
+        setTimeout(() => {
+            alert.style.display = 'none';
+        }, 3000);
+    }
+
+    function resetForm() {
+        if (confirm('Reset all settings to defaults?')) {
+            location.reload();
+        }
+    }
+
+    renderAirportTags();
+</script>
+{% endblock %}

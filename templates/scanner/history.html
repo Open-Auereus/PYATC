@@ -1,0 +1,284 @@
+{% extends 'base.html' %}
+
+{% block title %}History - Aviation Scanner{% endblock %}
+
+{% block extra_css %}
+<style>
+    .filter-bar {
+        display: flex;
+        gap: 16px;
+        margin-bottom: 24px;
+        flex-wrap: wrap;
+    }
+
+    .filter-bar input,
+    .filter-bar select {
+        padding: 10px 16px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text-primary);
+        font-size: 14px;
+    }
+
+    .transmissions-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .transmissions-table th {
+        background: var(--bg-tertiary);
+        padding: 12px;
+        text-align: left;
+        font-weight: 600;
+        border-bottom: 2px solid var(--border);
+        position: sticky;
+        top: 0;
+    }
+
+    .transmissions-table td {
+        padding: 12px;
+        border-bottom: 1px solid var(--border);
+    }
+
+    .transmissions-table tr:hover {
+        background: var(--bg-tertiary);
+        cursor: pointer;
+    }
+
+    .flight-rules-badge {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 700;
+    }
+
+    .flight-rules-vfr {
+        background: #10b98120;
+        color: var(--success);
+    }
+
+    .flight-rules-ifr {
+        background: #2563eb20;
+        color: var(--primary);
+    }
+
+    .flight-rules-unk {
+        background: #64748b20;
+        color: var(--text-secondary);
+    }
+
+    .modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.8);
+        z-index: 1000;
+        padding: 24px;
+        overflow-y: auto;
+    }
+
+    .modal-content {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 32px;
+        max-width: 600px;
+        margin: 0 auto;
+    }
+
+    .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 24px;
+    }
+
+    .modal-close {
+        background: none;
+        border: none;
+        color: var(--text-secondary);
+        font-size: 32px;
+        cursor: pointer;
+        padding: 0;
+        line-height: 1;
+    }
+
+    .detail-row {
+        padding: 12px 0;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        justify-content: space-between;
+    }
+
+    .detail-row:last-child {
+        border-bottom: none;
+    }
+
+    .detail-label {
+        color: var(--text-secondary);
+        font-weight: 600;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 32px; font-size: 32px;">Transmission History</h1>
+
+<div class="filter-bar">
+    <input type="text" id="searchInput" placeholder="Search by station, pilot, airport..." onkeyup="filterTable()">
+    <select id="flightRulesFilter" onchange="filterTable()">
+        <option value="">All Flight Rules</option>
+        <option value="VFR">VFR</option>
+        <option value="IFR">IFR</option>
+        <option value="UNK">Unknown</option>
+    </select>
+</div>
+
+<div class="card">
+    <div style="overflow-x: auto;">
+        <table class="transmissions-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Station</th>
+                    <th>Frequency</th>
+                    <th>Pilot</th>
+                    <th>Airport</th>
+                    <th>Position</th>
+                    <th>Rules</th>
+                    <th>Timestamp</th>
+                </tr>
+            </thead>
+            <tbody id="historyTableBody">
+                {% for t in transmissions %}
+                <tr onclick="showDetails({{ t.transmission_id }}, '{{ t.station_name }}', '{{ t.frequency }}', '{{ t.pilot }}', '{{ t.airport }}', '{{ t.position }}', '{{ t.flight_rules }}', '{{ t.voice_name }}', '{{ t.from_userid }}', {{ t.latitude|default:'null' }}, {{ t.longitude|default:'null' }}, '{{ t.timestamp|date:"Y-m-d H:i:s" }}')">
+                    <td>#{{ t.transmission_id }}</td>
+                    <td>{{ t.station_name }}</td>
+                    <td>{{ t.frequency }}</td>
+                    <td>{{ t.pilot }}</td>
+                    <td>{{ t.airport }}</td>
+                    <td>{{ t.position }}</td>
+                    <td>
+                        <span class="flight-rules-badge flight-rules-{{ t.flight_rules|lower }}">
+                            {{ t.flight_rules }}
+                        </span>
+                    </td>
+                    <td>{{ t.timestamp|date:"Y-m-d H:i:s" }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="8" style="text-align: center; color: var(--text-secondary);">
+                        No transmissions recorded yet
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div id="detailModal" class="modal" onclick="closeModal(event)">
+    <div class="modal-content" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <h2>Transmission Details</h2>
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <div id="modalBody"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    function filterTable() {
+        const searchValue = document.getElementById('searchInput').value.toLowerCase();
+        const rulesFilter = document.getElementById('flightRulesFilter').value;
+        const rows = document.querySelectorAll('#historyTableBody tr');
+
+        rows.forEach(row => {
+            const text = row.textContent.toLowerCase();
+            const matchesSearch = text.includes(searchValue);
+            const matchesRules = !rulesFilter || row.textContent.includes(rulesFilter);
+
+            if (matchesSearch && matchesRules) {
+                row.style.display = '';
+            } else {
+                row.style.display = 'none';
+            }
+        });
+    }
+
+    function showDetails(id, station, frequency, pilot, airport, position, rules, voice, userid, lat, lon, timestamp) {
+        const modal = document.getElementById('detailModal');
+        const body = document.getElementById('modalBody');
+
+        body.innerHTML = `
+            <div class="detail-row">
+                <span class="detail-label">Transmission ID</span>
+                <span>#${id}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Station Name</span>
+                <span>${station}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Frequency</span>
+                <span>${frequency}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Pilot</span>
+                <span>${pilot}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Airport</span>
+                <span>${airport}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Position</span>
+                <span>${position}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Flight Rules</span>
+                <span class="flight-rules-badge flight-rules-${rules.toLowerCase()}">${rules}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Voice Name</span>
+                <span>${voice}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">User ID</span>
+                <span>${userid}</span>
+            </div>
+            ${lat && lon ? `
+            <div class="detail-row">
+                <span class="detail-label">Location</span>
+                <span>${lat.toFixed(4)}, ${lon.toFixed(4)}</span>
+            </div>
+            ` : ''}
+            <div class="detail-row">
+                <span class="detail-label">Timestamp</span>
+                <span>${timestamp}</span>
+            </div>
+        `;
+
+        modal.style.display = 'block';
+    }
+
+    function closeModal(event) {
+        if (!event || event.target.id === 'detailModal') {
+            document.getElementById('detailModal').style.display = 'none';
+        }
+    }
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeModal();
+        }
+    });
+</script>
+{% endblock %}

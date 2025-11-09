@@ -1,0 +1,376 @@
+{% extends 'base.html' %}
+
+{% block title %}Live Scanner - Aviation Scanner{% endblock %}
+
+{% block extra_css %}
+<style>
+    .live-container {
+        display: grid;
+        grid-template-columns: 1fr 400px;
+        gap: 24px;
+    }
+
+    .transmission-display {
+        background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+        border: 2px solid var(--border);
+        border-radius: 16px;
+        padding: 48px;
+        min-height: 500px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .transmission-display::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: radial-gradient(circle at 50% 50%, rgba(37, 99, 235, 0.1) 0%, transparent 70%);
+        pointer-events: none;
+    }
+
+    .transmission-content {
+        text-align: center;
+        z-index: 1;
+        width: 100%;
+    }
+
+    .transmission-display.playing {
+        border-color: var(--success);
+        animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+        0%, 100% {
+            box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+        }
+        50% {
+            box-shadow: 0 0 0 20px rgba(16, 185, 129, 0);
+        }
+    }
+
+    .transmission-icon {
+        font-size: 72px;
+        margin-bottom: 24px;
+        opacity: 0.5;
+    }
+
+    .transmission-display.playing .transmission-icon {
+        opacity: 1;
+        animation: bounce 1s infinite;
+    }
+
+    @keyframes bounce {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-10px); }
+    }
+
+    .transmission-info {
+        margin-top: 24px;
+    }
+
+    .transmission-info h3 {
+        font-size: 28px;
+        margin-bottom: 8px;
+        color: var(--success);
+    }
+
+    .transmission-info p {
+        font-size: 16px;
+        color: var(--text-secondary);
+        margin: 4px 0;
+    }
+
+    .transmission-info .frequency {
+        font-size: 24px;
+        font-weight: 700;
+        color: var(--primary);
+        margin: 8px 0;
+    }
+
+    .controls {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+    }
+
+    .control-btn {
+        width: 100%;
+        padding: 16px;
+        font-size: 16px;
+    }
+
+    .status-panel {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 20px;
+    }
+
+    .status-panel h3 {
+        font-size: 16px;
+        margin-bottom: 16px;
+        color: var(--text-secondary);
+    }
+
+    .status-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 12px 0;
+        border-bottom: 1px solid var(--border);
+    }
+
+    .status-item:last-child {
+        border-bottom: none;
+    }
+
+    .status-label {
+        color: var(--text-secondary);
+    }
+
+    .status-value {
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+
+    .queue-info {
+        margin-top: 24px;
+    }
+
+    .idle-message {
+        text-align: center;
+        color: var(--text-secondary);
+    }
+
+    .idle-message h3 {
+        font-size: 24px;
+        margin-bottom: 16px;
+    }
+
+    @media (max-width: 1024px) {
+        .live-container {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="live-container">
+    <div>
+        <div class="transmission-display" id="transmissionDisplay">
+            <div class="transmission-content">
+                <div class="transmission-icon">🎧</div>
+                <div id="transmissionInfo">
+                    <div class="idle-message">
+                        <h3>Ready to Listen</h3>
+                        <p>Click "Start Scanner" to begin monitoring</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card" style="margin-top: 24px;">
+            <h2>Quick Stats</h2>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">
+                <div class="status-panel">
+                    <h3>Queue Size</h3>
+                    <div style="font-size: 32px; font-weight: 700; color: var(--primary);" id="queueSize">0</div>
+                </div>
+                <div class="status-panel">
+                    <h3>Last ID</h3>
+                    <div style="font-size: 32px; font-weight: 700; color: var(--success);" id="lastId">0</div>
+                </div>
+                <div class="status-panel">
+                    <h3>Status</h3>
+                    <div style="font-size: 18px; font-weight: 700; margin-top: 8px;">
+                        <span class="status-badge status-inactive" id="statusBadge">Stopped</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div>
+        <div class="card controls">
+            <h2>Scanner Controls</h2>
+            <button class="btn btn-success control-btn" id="startBtn" onclick="startScanner()">
+                ▶️ Start Scanner
+            </button>
+            <button class="btn btn-danger control-btn" id="stopBtn" onclick="stopScanner()" style="display: none;">
+                ⏹️ Stop Scanner
+            </button>
+            <button class="btn btn-primary control-btn" onclick="window.location.href='{% url 'scanner:settings' %}'">
+                ⚙️ Settings
+            </button>
+        </div>
+
+        <div class="card">
+            <h2>Current Settings</h2>
+            <div class="status-panel">
+                <div class="status-item">
+                    <span class="status-label">Volume</span>
+                    <span class="status-value" id="volumeValue">{{ status.settings.volume|default:'0.7' }}</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Fetch Interval</span>
+                    <span class="status-value" id="intervalValue">{{ status.settings.fetch_interval|default:'20' }}s</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">VFR Only</span>
+                    <span class="status-value" id="vfrValue">{{ status.settings.vfr_only|default:'No' }}</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Geo Filter</span>
+                    <span class="status-value" id="geoValue">{{ status.settings.geo_filter|default:'No' }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let isRunning = {{ status.running|lower }};
+    let currentAudio = null;
+    let updateInterval = null;
+
+    function updateUI() {
+        fetch('/api/status/')
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('queueSize').textContent = data.queue_size;
+                document.getElementById('lastId').textContent = data.last_played_id;
+
+                const statusBadge = document.getElementById('statusBadge');
+                if (data.running) {
+                    statusBadge.textContent = 'Running';
+                    statusBadge.className = 'status-badge status-active';
+                } else {
+                    statusBadge.textContent = 'Stopped';
+                    statusBadge.className = 'status-badge status-inactive';
+                }
+
+                if (data.settings) {
+                    document.getElementById('volumeValue').textContent = data.settings.volume;
+                    document.getElementById('intervalValue').textContent = data.settings.fetch_interval + 's';
+                    document.getElementById('vfrValue').textContent = data.settings.vfr_only ? 'Yes' : 'No';
+                    document.getElementById('geoValue').textContent = data.settings.geo_filter ? 'Yes' : 'No';
+                }
+            })
+            .catch(err => console.error('Error updating UI:', err));
+    }
+
+    function fetchNextAudio() {
+        if (!isRunning) return;
+
+        fetch('/api/next-audio/')
+            .then(r => {
+                if (r.status === 204) return null;
+                return r.json();
+            })
+            .then(data => {
+                if (data && data.id) {
+                    displayTransmission(data);
+                    playAudio(data.url);
+                }
+            })
+            .catch(err => console.error('Error fetching audio:', err));
+    }
+
+    function displayTransmission(data) {
+        const display = document.getElementById('transmissionDisplay');
+        const info = document.getElementById('transmissionInfo');
+
+        display.classList.add('playing');
+
+        info.innerHTML = `
+            <div class="transmission-info">
+                <h3>${data.station_name}</h3>
+                <div class="frequency">${data.frequency}</div>
+                <p><strong>Pilot:</strong> ${data.pilot}</p>
+                <p><strong>Airport:</strong> ${data.airport}</p>
+                <p><strong>Position:</strong> ${data.position}</p>
+                ${data.lat && data.lon ? `<p><strong>Location:</strong> ${data.lat.toFixed(4)}, ${data.lon.toFixed(4)}</p>` : ''}
+            </div>
+        `;
+    }
+
+    function clearTransmission() {
+        const display = document.getElementById('transmissionDisplay');
+        const info = document.getElementById('transmissionInfo');
+
+        display.classList.remove('playing');
+
+        info.innerHTML = `
+            <div class="idle-message">
+                <h3>Waiting for transmission...</h3>
+                <p>Listening for next audio</p>
+            </div>
+        `;
+    }
+
+    function playAudio(url) {
+        if (currentAudio) {
+            currentAudio.pause();
+        }
+
+        currentAudio = new Audio(url);
+        currentAudio.volume = parseFloat(document.getElementById('volumeValue').textContent);
+
+        currentAudio.play().catch(err => {
+            console.error('Error playing audio:', err);
+        });
+
+        currentAudio.onended = () => {
+            clearTransmission();
+            setTimeout(fetchNextAudio, 500);
+        };
+    }
+
+    function startScanner() {
+        fetch('/api/start/', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                isRunning = true;
+                document.getElementById('startBtn').style.display = 'none';
+                document.getElementById('stopBtn').style.display = 'block';
+                updateInterval = setInterval(updateUI, 2000);
+                fetchNextAudio();
+                updateUI();
+            })
+            .catch(err => console.error('Error starting scanner:', err));
+    }
+
+    function stopScanner() {
+        fetch('/api/stop/', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                isRunning = false;
+                document.getElementById('startBtn').style.display = 'block';
+                document.getElementById('stopBtn').style.display = 'none';
+                if (updateInterval) clearInterval(updateInterval);
+                if (currentAudio) currentAudio.pause();
+                clearTransmission();
+                updateUI();
+            })
+            .catch(err => console.error('Error stopping scanner:', err));
+    }
+
+    if (isRunning) {
+        document.getElementById('startBtn').style.display = 'none';
+        document.getElementById('stopBtn').style.display = 'block';
+        updateInterval = setInterval(updateUI, 2000);
+        fetchNextAudio();
+    }
+
+    updateUI();
+</script>
+{% endblock %}

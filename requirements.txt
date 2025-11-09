@@ -1,0 +1,12 @@
+Django>=4.2.0
+channels>=4.0.0
+channels-redis>=4.1.0
+psycopg2-binary>=2.9.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+sounddevice>=0.4.6
+numpy>=1.24.0
+pydub>=0.25.1
+miniaudio>=1.59
+websocket-client>=1.6.0
+daphne>=4.0.0

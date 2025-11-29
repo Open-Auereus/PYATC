@@ -1,34 +1,32 @@
-def websocket_available():
-    try:
-        import websocket
-        WEBSOCKET_AVAILABLE = True
-    except ImportError:
-        WEBSOCKET_AVAILABLE = False
-        print("WebSocket support not available. Install with: pip install websocket-client rel")
+"""Dependency availability checks for PYATC scanner."""
+
+
+def check_dependencies():
+    """Check which optional dependencies are available."""
     try:
         from pydub import AudioSegment
-        PYDUB_AVAILABLE = True
+        pydub_available = True
+        audio_segment = AudioSegment
     except ImportError:
-        PYDUB_AVAILABLE = False
+        pydub_available = False
+        audio_segment = None
         print("Pydub not available. Install with: pip install pydub")
 
     try:
-        from pydub import miniaudio
-        MINIAUDIO_AVAILABLE = True
+        import miniaudio
+        miniaudio_available = True
     except ImportError:
-        MINIAUDIO_AVAILABLE = False
+        miniaudio_available = False
 
-    # Create a simple object to hold our values
     class Deps:
         def __init__(self):
-            self.websocket = WEBSOCKET_AVAILABLE
-            self.pydub = PYDUB_AVAILABLE
-            self.miniaudio = MINIAUDIO_AVAILABLE
-            self.audios = AudioSegment if PYDUB_AVAILABLE else None
-    
+            self.pydub = pydub_available
+            self.miniaudio = miniaudio_available
+            self.audios = audio_segment
+
     return Deps()
 
-deps = websocket_available()
+
+deps = check_dependencies()
 MINIAUDIO_AVAILABLE = deps.miniaudio
 PYDUB_AVAILABLE = deps.pydub
-WEBSOCKET_AVAILABLE = deps.websocket

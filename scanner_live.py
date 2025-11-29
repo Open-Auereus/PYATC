@@ -1,23 +1,16 @@
 #!/usr/bin/env python3
-
-#!/usr/bin/env python3
 """
-Enhanced Real-Time Aviation Scanner with WebSocket support
-Provides lower latency audio streaming and optional WebSocket connections
+Real-Time Aviation Scanner
+Provides audio streaming for ATC transmissions via REST API polling
 """
 
 import os
-import platform
 import time
-import asyncio
-import platform
 import requests
-import time
 import threading
 import queue
 import argparse
-import asyncio
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 from urllib.parse import urljoin
 import logging
@@ -25,17 +18,9 @@ import sounddevice as sd
 import numpy as np
 import io
 import json
-from pathlib import Path
-import subprocess
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor
 
-try:
-    import websocket
-    WEBSOCKET_AVAILABLE = True
-except ImportError:
-    WEBSOCKET_AVAILABLE = False
-    print("WebSocket support not available. Install with: pip install websocket-client rel")
 try:
     from pydub import AudioSegment
     PYDUB_AVAILABLE = True
@@ -224,18 +209,17 @@ class EnhancedAudioStreamer:
         self.is_playing = False
         try:
             sd.stop()
-        except:
+        except Exception:
             pass
 
 
 class RealtimeScanner:
-    """Enhanced scanner with real-time capabilities"""
+    """Scanner with real-time audio streaming via REST API polling"""
 
     def __init__(self,
                  api_base_url: str = None,
                  volume: float = 0.7,
                  fetch_interval: int = 3,
-                 use_websocket: bool = True,
                  prefetch_audio: bool = True,
                  vfr_only: bool = False,
                  geo_filter: bool = False,
@@ -244,7 +228,6 @@ class RealtimeScanner:
         self.api_base_url = api_base_url or API_URL
         self.volume = volume
         self.fetch_interval = fetch_interval
-        self.use_websocket = use_websocket and WEBSOCKET_AVAILABLE
         self.prefetch_audio = prefetch_audio
         self.vfr_only = vfr_only
         self.geo_filter = geo_filter
@@ -260,7 +243,6 @@ class RealtimeScanner:
         # State
         self.last_played_id = 0
         self.is_running = False
-        self.ws = None
 
         # Geographic bounds (Albuquerque ARTCC)
         self.zab_bounds = CONFIG.get('zab_bounds', {
@@ -274,63 +256,7 @@ class RealtimeScanner:
         self.fetch_thread = None
         self.play_thread = None
 
-        logger.info(f"Realtime Scanner initialized - WebSocket: {self.use_websocket}, Prefetch: {self.prefetch_audio}")
-
-    # def connect_websocket(self):
-    #
-    #     if not self.use_websocket:
-    #         return
-
-    #     ws_url = WS_URL.replace("https://", "wss://").replace("http://", "ws://")
-
-        # def on_message(message):
-        #     try:
-        #         data = json.loads(message)
-        #         if data.get('type') == 'audio':
-        #             audio_obj = self._parse_audio_data(data.get('data', {}))
-        #             if audio_obj:
-        #                 # Add with high priority for real-time data
-        #                 self.audio_queue.put((0, time.time(), audio_obj))
-        #                 if self.audio_buffer:
-        #                     self.audio_buffer.prefetch(audio_obj)
-        #                 logger.debug(f"Received real-time audio ID {audio_obj.id}")
-        #     except Exception as e:
-        #         logger.error(f"WebSocket message error: {e}")
-
-        # def on_error(ws, error):
-        #     logger.error(f"WebSocket error: {error}")
-
-        # def on_close(ws, close_status_code, close_msg):
-        #     logger.info("WebSocket closed")
-        #     if self.is_running:
-        #         time.sleep(5)
-        #         self.connect_websocket()  # Reconnect
-
-        # def on_open(ws):
-        #     logger.info("WebSocket connected")
-        #     # Send subscription message
-        #     ws.send(json.dumps({
-        #         'type': 'subscribe',
-        #         'last_id': self.last_played_id,
-        #         'filters': {
-        #             'vfr_only': self.vfr_only,
-        #             'airports': self.airports
-        #         }
-        #     }))
-
-        # try:
-        #     self.ws = websocket.WebSocketApp(ws_url,
-        #                                     on_open=on_open,
-        #                                     on_message=on_message,
-        #                                     on_error=on_error,
-        #                                     on_close=on_close)
-
-            # Run in background thread
-        #     ws_thread = threading.Thread(target=self.ws.run_forever, daemon=True)
-        #     ws_thread.start()
-        # except Exception as e:
-        #     logger.error(f"Failed to connect WebSocket: {e}")
-        #     self.use_websocket = False
+        logger.info(f"Realtime Scanner initialized - Prefetch: {self.prefetch_audio}")
 
     def _parse_audio_data(self, item: dict) -> Optional[AudioData]:
         """Parse API response to AudioData object"""
@@ -406,7 +332,7 @@ class RealtimeScanner:
                 return False
 
             # Display transmission info
-            print(f"   LIVE TRANSMISSION")
+            print("   LIVE TRANSMISSION")
             print(f"   Station: {audio.station_name}")
             print(f"   Frequency: {audio.frequency}")
             print(f"   Pilot: {audio.pilot}")
@@ -425,7 +351,6 @@ class RealtimeScanner:
                 response.raise_for_status()
                 audio_bytes = response.content
 
-            
             return self.audio_streamer.stream_audio_instant(audio_bytes)
 
         except Exception as e:
@@ -459,17 +384,16 @@ class RealtimeScanner:
 
         while self.is_running:
             try:
-                if not self.use_websocket or not self.ws:
-                    # Fetch via REST API
-                    audio_list = self.fetch_audio_batch()
+                # Fetch via REST API
+                audio_list = self.fetch_audio_batch()
 
-                    for audio in audio_list:
-                        # Add with normal priority
-                        self.audio_queue.put((1, time.time(), audio))
+                for audio in audio_list:
+                    # Add with normal priority
+                    self.audio_queue.put((1, time.time(), audio))
 
-                        # Prefetch if enabled
-                        if self.audio_buffer:
-                            self.audio_buffer.prefetch(audio)
+                    # Prefetch if enabled
+                    if self.audio_buffer:
+                        self.audio_buffer.prefetch(audio)
 
                 # Wait before next fetch
                 time.sleep(self.fetch_interval)
@@ -485,10 +409,6 @@ class RealtimeScanner:
 
         logger.info("Starting Realtime Scanner...")
         self.is_running = True
-
-        # Connect WebSocket if enabled
-        # if self.use_websocket:
-        #     self.connect_websocket()
 
         # Start worker threads
         self.play_thread = threading.Thread(target=self.audio_player_worker, daemon=True)
@@ -511,9 +431,6 @@ class RealtimeScanner:
         logger.info("Stopping scanner...")
         self.is_running = False
 
-        if self.ws:
-            self.ws.close()
-
         if self.audio_buffer:
             self.audio_buffer.clear()
 
@@ -532,7 +449,6 @@ class RealtimeScanner:
             "playing": self.audio_streamer.is_playing,
             "queue_size": self.audio_queue.qsize(),
             "last_played_id": self.last_played_id,
-            "websocket": "connected" if self.ws else "disconnected",
             "prefetch": self.prefetch_audio,
             "buffer_size": len(self.audio_buffer.buffer) if self.audio_buffer else 0
         }
@@ -543,7 +459,6 @@ def main():
     parser.add_argument("--api", type=str, help="API base URL")
     parser.add_argument("--volume", type=float, default=0.7, help="Volume (0.0-1.0)")
     parser.add_argument("--interval", type=int, default=3, help="Fetch interval (seconds)")
-    parser.add_argument("--no-websocket", action="store_true", help="Disable WebSocket")
     parser.add_argument("--no-prefetch", action="store_true", help="Disable audio prefetching")
     parser.add_argument("--vfr-only", action="store_true", help="Only play VFR traffic")
     parser.add_argument("--geo-filter", action="store_true", help="Enable geographic filtering")
@@ -560,7 +475,6 @@ def main():
         api_base_url=args.api,
         volume=args.volume,
         fetch_interval=args.interval,
-        use_websocket=not args.no_websocket,
         prefetch_audio=not args.no_prefetch,
         vfr_only=args.vfr_only,
         geo_filter=args.geo_filter,
@@ -573,7 +487,6 @@ def main():
         print("\n✈️  Real-Time Aviation Scanner")
         print("=" * 40)
         print(f"API: {scanner.api_base_url}")
-        print(f"WebSocket: {'Enabled' if scanner.use_websocket else 'Disabled'}")
         print(f"Prefetch: {'Enabled' if scanner.prefetch_audio else 'Disabled'}")
         print(f"Volume: {scanner.volume}")
         print("\nPress Ctrl+C to stop\n")

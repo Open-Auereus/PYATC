@@ -1,0 +1,16 @@
+# Core dependencies
+requests>=2.28.0
+python-dotenv>=1.0.0
+numpy>=1.24.0
+
+# Audio playback dependencies
+pydub>=0.25.0
+sounddevice>=0.4.0
+
+# Optional: low-latency audio (uncomment if needed)
+# miniaudio>=1.50
+
+# Note: pydub requires ffmpeg to be installed on your system
+# On Ubuntu/Debian: sudo apt-get install ffmpeg
+# On macOS: brew install ffmpeg
+# On Windows: Download from https://ffmpeg.org/download.html

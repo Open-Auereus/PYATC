@@ -209,7 +209,7 @@ class EnhancedAudioStreamer:
         self.is_playing = False
         try:
             sd.stop()
-        except Exception:
+        except sd.PortAudioError:
             pass
 
 

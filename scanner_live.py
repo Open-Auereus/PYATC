@@ -209,8 +209,8 @@ class EnhancedAudioStreamer:
         self.is_playing = False
         try:
             sd.stop()
-        except sd.PortAudioError:
-            pass
+        except sd.PortAudioError as e:
+            logger.warning(f"Failed to stop PortAudio device: {e}")
 
 
 class RealtimeScanner:

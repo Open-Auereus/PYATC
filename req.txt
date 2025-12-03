@@ -1,0 +1,11 @@
+requests
+numpy
+sounddevice
+python-dotenv
+websocket-client
+pydub
+miniaudio
+
+# Notes:
+# - `pydub` requires an external `ffmpeg` binary (install via system package manager).
+# - `sounddevice` depends on PortAudio (system library) on Windows; install appropriate wheels or PortAudio.
